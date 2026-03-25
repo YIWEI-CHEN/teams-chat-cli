@@ -145,13 +145,13 @@ def main():
         epilog="""
 Examples:
   Read the last 10 messages:
-    python teams_cli.py read
+    uv run teams read
 
   Read the last 25 messages in JSON format:
-    python teams_cli.py read --limit 25 --json
+    uv run teams read --limit 25 --json
 
   Send a message:
-    python teams_cli.py send "Hello from the CLI!"
+    uv run teams send "Hello from the CLI!"
         """,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

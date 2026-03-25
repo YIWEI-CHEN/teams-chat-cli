@@ -1,0 +1,20 @@
+[project]
+name = "teams-chat-cli"
+version = "0.1.0"
+description = "Send and read Microsoft Teams channel messages via Microsoft Graph API"
+requires-python = ">=3.8"
+dependencies = [
+    "msal>=1.28.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+teams = "teams_cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["teams_cli.py"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

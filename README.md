@@ -6,7 +6,7 @@ A Python CLI tool to send and read Microsoft Teams channel messages via the Micr
 
 ## Prerequisites
 
-- Python 3.8+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
 - An Azure subscription with permission to register applications in Microsoft Entra ID (Azure AD)
 - Microsoft Teams with an existing team and channel
 
@@ -72,11 +72,10 @@ GET https://graph.microsoft.com/v1.0/teams/{team-id}/channels
 git clone https://github.com/yiwei-chen/teams-chat-cli.git
 cd teams-chat-cli
 
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-
-pip install -r requirements.txt
+uv sync
 ```
+
+This creates a virtual environment and installs all dependencies automatically.
 
 ---
 
@@ -108,13 +107,13 @@ CHANNEL_ID=19:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@thread.tacv2
 
 ```bash
 # Read the last 10 messages (default)
-python teams_cli.py read
+uv run teams read
 
 # Read the last 25 messages
-python teams_cli.py read --limit 25
+uv run teams read --limit 25
 
 # Output raw JSON from the Graph API
-python teams_cli.py read --json
+uv run teams read --json
 ```
 
 Example output:
@@ -137,7 +136,7 @@ Example output:
 ### Send a message
 
 ```bash
-python teams_cli.py send "Hello from the CLI!"
+uv run teams send "Hello from the CLI!"
 ```
 
 Example output:
@@ -149,9 +148,9 @@ Message sent successfully (id=1730456123456, time=2024-11-01 09:22 UTC)
 ### Help
 
 ```bash
-python teams_cli.py --help
-python teams_cli.py read --help
-python teams_cli.py send --help
+uv run teams --help
+uv run teams read --help
+uv run teams send --help
 ```
 
 ---
