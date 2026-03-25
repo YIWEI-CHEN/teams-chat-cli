@@ -1,6 +1,6 @@
 # teams-chat-cli
 
-A Python CLI tool to send and read Microsoft Teams channel messages via the Microsoft Graph API using app-only (daemon) authentication.
+A Python CLI tool to send and read Microsoft Teams channel messages via the Microsoft Graph API using interactive user login (delegated auth).
 
 ---
 
@@ -14,8 +14,6 @@ A Python CLI tool to send and read Microsoft Teams channel messages via the Micr
 
 ## Azure AD App Registration
 
-Follow these steps to create the app registration that allows the CLI to authenticate and call the Graph API.
-
 ### 1. Register a new application
 
 1. Sign in to the [Azure Portal](https://portal.azure.com).
@@ -23,39 +21,36 @@ Follow these steps to create the app registration that allows the CLI to authent
 3. Fill in:
    - **Name**: `teams-chat-cli` (or any name you prefer)
    - **Supported account types**: *Accounts in this organizational directory only*
-   - **Redirect URI**: leave blank (not needed for client credentials flow)
+   - **Redirect URI**: select **Public client/native (mobile & desktop)** and enter `http://localhost`
 4. Click **Register**.
-5. Note the **Application (client) ID** and **Directory (tenant) ID** — you'll need these later.
+5. Note the **Application (client) ID** — this is the only credential you need.
 
-### 2. Create a client secret
+> No client secret is required. The CLI opens a browser window for interactive login.
 
-1. In your app registration, go to **Certificates & secrets** → **New client secret**.
-2. Add a description (e.g., `cli-secret`) and choose an expiry.
-3. Click **Add** and immediately copy the **Value** — it is only shown once.
+### 2. Enable the public client flow
+
+1. In your app registration go to **Authentication**.
+2. Under **Advanced settings**, set **Allow public client flows** to **Yes**.
+3. Click **Save**.
 
 ### 3. Grant API permissions
 
-The CLI uses **application permissions** (no user sign-in required).
-
-1. Go to **API permissions** → **Add a permission** → **Microsoft Graph** → **Application permissions**.
-2. Search for and add the following permissions:
+1. Go to **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions**.
+2. Search for and add:
 
 | Permission | Purpose |
 |---|---|
-| `ChannelMessage.Read.All` | Read messages from any channel |
-| `ChannelMessage.Send` | Send messages to any channel |
+| `ChannelMessage.Read.All` | Read messages from a channel as the signed-in user |
+| `ChannelMessage.Send` | Send messages to a channel as the signed-in user |
 
 3. Click **Grant admin consent for \<your tenant\>** and confirm.
-   - Admin consent is required for application permissions.
-
-> **Note:** `ChannelMessage.Send` as an application permission is in [limited access](https://learn.microsoft.com/en-us/graph/teams-protected-apis). You may need to request access via the Graph API protected APIs form, or use a delegated flow for sending in production.
 
 ### 4. Find your Team ID and Channel ID
 
 **Using the Teams desktop app:**
 
-1. Open Teams, right-click the team name → **Get link to team**. The URL contains the `groupId` query parameter — that is your **Team ID**.
-2. Right-click the channel name → **Get link to channel**. The URL contains the channel ID after `/channel/`.
+1. Right-click the **team name** → **Get link to team**. Copy the `groupId=...` value from the URL → `TEAM_ID`.
+2. Right-click the **channel name** → **Get link to channel**. Copy the ID between `/channel/` and the next `/` → `CHANNEL_ID`.
 
 **Using Graph Explorer:**
 
@@ -75,13 +70,9 @@ cd teams-chat-cli
 uv sync
 ```
 
-This creates a virtual environment and installs all dependencies automatically.
-
 ---
 
 ## Configuration
-
-Copy the example env file and fill in your values:
 
 ```bash
 cp .env.example .env
@@ -90,9 +81,11 @@ cp .env.example .env
 Edit `.env`:
 
 ```ini
-TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-CLIENT_SECRET=your-client-secret-value
+
+# Optional — omit to allow any work/school account to log in
+# TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
 TEAM_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 CHANNEL_ID=19:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@thread.tacv2
 ```
@@ -102,6 +95,10 @@ CHANNEL_ID=19:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@thread.tacv2
 ---
 
 ## Usage
+
+### First run — login
+
+On the first run the browser opens automatically for Microsoft login. After you sign in, the token is cached at `~/.teams_cli_cache.json` and reused on subsequent runs (no repeated login needed).
 
 ### Read messages
 
@@ -139,10 +136,16 @@ Example output:
 uv run teams send "Hello from the CLI!"
 ```
 
-Example output:
-
 ```
 Message sent successfully (id=1730456123456, time=2024-11-01 09:22 UTC)
+```
+
+### Log out
+
+Clears the cached token. You will be prompted to log in again on the next run.
+
+```bash
+uv run teams logout
 ```
 
 ### Help
@@ -159,16 +162,16 @@ uv run teams send --help
 
 | Permission | Type | Description |
 |---|---|---|
-| `ChannelMessage.Read.All` | Application | Read all messages in all Teams channels |
-| `ChannelMessage.Send` | Application | Send messages to any Teams channel |
+| `ChannelMessage.Read.All` | Delegated | Read channel messages as the signed-in user |
+| `ChannelMessage.Send` | Delegated | Send channel messages as the signed-in user |
 
 ---
 
 ## How It Works
 
-1. **Authentication**: Uses [MSAL for Python](https://github.com/AzureAD/microsoft-authentication-library-for-python) with the client credentials (app-only) flow to obtain a bearer token from Microsoft Entra ID.
-2. **Read**: Calls `GET /teams/{teamId}/channels/{channelId}/messages` and displays the results.
-3. **Send**: Calls `POST /teams/{teamId}/channels/{channelId}/messages` with a JSON body.
+1. **Authentication**: Uses [MSAL for Python](https://github.com/AzureAD/microsoft-authentication-library-for-python) `PublicClientApplication` with the interactive browser flow. The token is cached at `~/.teams_cli_cache.json` (mode `600`) and refreshed silently on subsequent runs.
+2. **Read**: Calls `GET /teams/{teamId}/channels/{channelId}/messages`.
+3. **Send**: Calls `POST /teams/{teamId}/channels/{channelId}/messages`.
 
 ---
 
@@ -178,6 +181,7 @@ uv run teams send --help
 |---|---|
 | `Missing required environment variables` | `.env` file is missing or incomplete |
 | `AADSTS700016` | `CLIENT_ID` is wrong or app doesn't exist in the tenant |
-| `AADSTS7000215` | `CLIENT_SECRET` is incorrect or expired |
-| `403 Forbidden` | API permissions not granted or admin consent not given |
+| `AADSTS50011` | Redirect URI `http://localhost` not added in app registration |
+| `AADSTS65001` | Admin consent not granted for the required permissions |
+| `403 Forbidden` | Permissions not granted or user lacks access to the team/channel |
 | `404 Not Found` | `TEAM_ID` or `CHANNEL_ID` is wrong |

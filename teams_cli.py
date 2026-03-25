@@ -3,19 +3,30 @@
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import msal
 import requests
 from dotenv import load_dotenv
 import os
 
+# Delegated permission scopes
+SCOPES = [
+    "https://graph.microsoft.com/ChannelMessage.Read.All",
+    "https://graph.microsoft.com/ChannelMessage.Send",
+]
+
+# Token cache stored in the user's home directory
+TOKEN_CACHE_FILE = Path.home() / ".teams_cli_cache.json"
+
 
 def load_config():
     """Load configuration from .env file."""
     load_dotenv()
-    required = ["TENANT_ID", "CLIENT_ID", "CLIENT_SECRET", "TEAM_ID", "CHANNEL_ID"]
+    required = ["CLIENT_ID", "TEAM_ID", "CHANNEL_ID"]
     config = {}
     missing = []
     for key in required:
@@ -27,24 +38,45 @@ def load_config():
         print(f"Error: Missing required environment variables: {', '.join(missing)}")
         print("Copy .env.example to .env and fill in your values.")
         sys.exit(1)
+    # TENANT_ID is optional — defaults to "organizations" (any work/school account)
+    config["TENANT_ID"] = os.getenv("TENANT_ID", "organizations")
     return config
 
 
 def get_access_token(config):
-    """Acquire an access token using the client credentials flow."""
+    """Acquire a token interactively (browser popup), using cache when possible."""
+    cache = msal.SerializableTokenCache()
+    if TOKEN_CACHE_FILE.exists():
+        cache.deserialize(TOKEN_CACHE_FILE.read_text())
+
     authority = f"https://login.microsoftonline.com/{config['TENANT_ID']}"
-    app = msal.ConfidentialClientApplication(
+    app = msal.PublicClientApplication(
         client_id=config["CLIENT_ID"],
-        client_credential=config["CLIENT_SECRET"],
         authority=authority,
+        token_cache=cache,
     )
-    result = app.acquire_token_for_client(
-        scopes=["https://graph.microsoft.com/.default"]
-    )
+
+    # Try to use a cached token silently first
+    result = None
+    accounts = app.get_accounts()
+    if accounts:
+        result = app.acquire_token_silent(SCOPES, account=accounts[0])
+
+    # No cached token — open browser for interactive login
+    if not result:
+        print("Opening browser for login...")
+        result = app.acquire_token_interactive(scopes=SCOPES)
+
+    # Persist the updated cache
+    if cache.has_state_changed:
+        TOKEN_CACHE_FILE.write_text(cache.serialize())
+        TOKEN_CACHE_FILE.chmod(0o600)
+
     if "access_token" not in result:
         error = result.get("error_description", result.get("error", "Unknown error"))
         print(f"Error acquiring token: {error}")
         sys.exit(1)
+
     return result["access_token"]
 
 
@@ -102,20 +134,14 @@ def cmd_read(args, config, token):
     print(f"{'='*60}\n")
 
     for msg in reversed(messages):
-        sender = (
-            msg.get("from", {}) or {}
-        )
+        sender = msg.get("from", {}) or {}
         sender_name = (
             (sender.get("user") or {}).get("displayName")
             or (sender.get("application") or {}).get("displayName")
             or "Unknown"
         )
         timestamp = format_timestamp(msg.get("createdDateTime"))
-        body = (msg.get("body") or {}).get("content", "")
-
-        # Strip simple HTML tags for plain-text display
-        import re
-        body = re.sub(r"<[^>]+>", "", body).strip()
+        body = re.sub(r"<[^>]+>", "", (msg.get("body") or {}).get("content", "")).strip()
 
         print(f"[{timestamp}] {sender_name}")
         print(f"  {body}")
@@ -125,17 +151,19 @@ def cmd_read(args, config, token):
 def cmd_send(args, config, token):
     """Send a message to a Teams channel."""
     endpoint = f"/teams/{config['TEAM_ID']}/channels/{config['CHANNEL_ID']}/messages"
-    payload = {
-        "body": {
-            "contentType": "text",
-            "content": args.message,
-        }
-    }
+    payload = {"body": {"contentType": "text", "content": args.message}}
     response = graph_request("POST", endpoint, token, json=payload)
     msg = response.json()
-    msg_id = msg.get("id", "unknown")
-    timestamp = format_timestamp(msg.get("createdDateTime"))
-    print(f"Message sent successfully (id={msg_id}, time={timestamp})")
+    print(f"Message sent successfully (id={msg.get('id', 'unknown')}, time={format_timestamp(msg.get('createdDateTime'))})")
+
+
+def cmd_logout(args, config, token):
+    """Remove the cached token, forcing a fresh login next time."""
+    if TOKEN_CACHE_FILE.exists():
+        TOKEN_CACHE_FILE.unlink()
+        print("Logged out. You will be prompted to log in again on the next run.")
+    else:
+        print("No cached session found.")
 
 
 def main():
@@ -152,32 +180,35 @@ Examples:
 
   Send a message:
     uv run teams send "Hello from the CLI!"
+
+  Log out (clear cached token):
+    uv run teams logout
         """,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # read subcommand
     read_parser = subparsers.add_parser("read", help="Read messages from the channel")
     read_parser.add_argument(
-        "--limit",
-        type=int,
-        default=10,
-        metavar="N",
+        "--limit", type=int, default=10, metavar="N",
         help="Number of messages to retrieve (default: 10)",
     )
     read_parser.add_argument(
-        "--json",
-        action="store_true",
+        "--json", action="store_true",
         help="Output raw JSON from the Graph API",
     )
 
-    # send subcommand
     send_parser = subparsers.add_parser("send", help="Send a message to the channel")
     send_parser.add_argument("message", help="Text of the message to send")
 
-    args = parser.parse_args()
+    subparsers.add_parser("logout", help="Clear the cached login token")
 
+    args = parser.parse_args()
     config = load_config()
+
+    if args.command == "logout":
+        cmd_logout(args, config, None)
+        return
+
     token = get_access_token(config)
 
     if args.command == "read":
